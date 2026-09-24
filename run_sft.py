@@ -35,19 +35,31 @@ TEST_SIZE = 100
 BATCH_SIZE = 4
 MAX_LENGTH = 16
 
-NUM_STEPS = 50
+
 
 LEARNING_RATE = 1e-5
 WEIGHT_DECAY = 0.01
 
-LOG_EVERY = 5
+
 
 SEED = 42
 
 OUTPUT_DIR = "sft_checkpoints"
+
+# test1
+# NUM_STEPS = 50
+# LOG_EVERY = 5
+# OUTPUT_PATH = os.path.join(
+#     OUTPUT_DIR,
+#     "sedd_small_addition_50steps.pt"
+# )
+
+# test2
+NUM_STEPS = 500
+LOG_EVERY = 25
 OUTPUT_PATH = os.path.join(
     OUTPUT_DIR,
-    "sedd_small_addition_50steps.pt"
+    "sedd_small_addition_500steps.pt"
 )
 
 

@@ -19,4 +19,4 @@ assets/
 **.npz
 core
 **.log
-*.jsonl
+*.jsonlsft_checkpoints/
