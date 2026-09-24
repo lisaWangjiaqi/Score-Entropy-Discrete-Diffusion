@@ -2,51 +2,110 @@ import torch
 from torch import nn
 
 
-class Rotary(torch.nn.Module):
+class Rotary(nn.Module):
+  
+
     def __init__(self, dim, base=10_000):
         super().__init__()
-        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+
+        # """(dim // 2,)"""
+        inv_freq = 1.0 / (
+            base ** (
+                torch.arange(0, dim, 2).float() / dim
+            )
+        )
+
         self.register_buffer("inv_freq", inv_freq)
+
         self.seq_len_cached = None
         self.cos_cached = None
         self.sin_cached = None
 
     def forward(self, x, seq_dim=1):
+  
+
         seq_len = x.shape[seq_dim]
-        if seq_len != self.seq_len_cached:
+
+        # Recompute cache if sequence length or device changes
+        if (
+            seq_len != self.seq_len_cached
+            or self.cos_cached is None
+            or self.cos_cached.device != x.device
+        ):
             self.seq_len_cached = seq_len
-            t = torch.arange(x.shape[seq_dim], device=x.device).type_as(self.inv_freq)
-            freqs = torch.einsum("i,j->ij", t, self.inv_freq.clone())
-            emb = torch.cat((freqs, freqs), dim=-1).to(x.device)
-            # dims are: batch, seq_len, qkv, head, dim
-            self.cos_cached = emb.cos()[None, :, None, None, :].repeat(1,1,3,1,1)
-            self.sin_cached = emb.sin()[None, :, None, None, :].repeat(1,1,3,1,1)
-            # This makes the transformation on v an identity.
-            self.cos_cached[:,:,2,:,:].fill_(1.)
-            self.sin_cached[:,:,2,:,:].fill_(0.)
+
+            # """(seq_len,)"""
+            t = torch.arange(
+                seq_len,
+                device=x.device,
+                dtype=self.inv_freq.dtype,
+            )
+
+            # """(seq_len,) x (head_dim // 2,)
+            # -> (seq_len, head_dim // 2)"""
+            freqs = torch.outer(
+                t,
+                self.inv_freq.to(x.device)
+            )
+
+            # """(seq_len, head_dim // 2)
+            # -> (seq_len, head_dim)"""
+            emb = torch.cat(
+                (freqs, freqs),
+                dim=-1
+            )
+
+            # """(seq_len, head_dim)
+            # -> (1, seq_len, 3, 1, head_dim)"""
+            cos = (
+                emb.cos()[None, :, None, None, :]
+                .repeat(1, 1, 3, 1, 1)
+            )
+
+            sin = (
+                emb.sin()[None, :, None, None, :]
+                .repeat(1, 1, 3, 1, 1)
+            )
+
+            # Q and K use RoPE.
+            # V should remain unchanged:
+            # V_new = V * 1 + rotate(V) * 0
+            cos[:, :, 2, :, :] = 1.0
+            sin[:, :, 2, :, :] = 0.0
+
+            self.cos_cached = cos
+            self.sin_cached = sin
 
         return self.cos_cached, self.sin_cached
 
 
 def rotate_half(x):
-    x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2 :]
+  
+    half_dim = x.shape[-1] // 2
+
+    x1 = x[..., :half_dim]
+    x2 = x[..., half_dim:]
+
     return torch.cat(
-        (-x2, x1), dim=-1
+        (-x2, x1),
+        dim=-1
     )
 
 
-@torch.jit.script
-def _apply_rotary_pos_emb_torchscript(qkv, cos, sin):
-    return (qkv * cos) + (rotate_half(qkv) * sin)
-
-
 def apply_rotary_pos_emb(qkv, cos, sin):
-    try:
-        import flash_attn.layers.rotary
-        cos = cos[0,:,0,0,:cos.shape[-1]//2]
-        sin = sin[0,:,0,0,:sin.shape[-1]//2]
-        return flash_attn.layers.rotary.apply_rotary_emb_qkv_(
-            qkv, cos, sin
-        )
-    except:
-        return _apply_rotary_pos_emb_torchscript(qkv, cos, sin)
+
+
+    cos = cos.to(
+        device=qkv.device,
+        dtype=qkv.dtype
+    )
+
+    sin = sin.to(
+        device=qkv.device,
+        dtype=qkv.dtype
+    )
+
+    return (
+        qkv * cos
+        + rotate_half(qkv) * sin
+    )
